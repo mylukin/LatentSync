@@ -256,10 +256,22 @@ class LipsyncPipeline(DiffusionPipeline):
         affine_matrices = []
         print(f"Affine transforming {len(video_frames)} faces...")
         for frame in tqdm.tqdm(video_frames):
-            face, box, affine_matrix = self.image_processor.affine_transform(frame)
-            faces.append(face)
-            boxes.append(box)
-            affine_matrices.append(affine_matrix)
+            try:
+                face, box, affine_matrix = self.image_processor.affine_transform(frame)
+                faces.append(face)
+                boxes.append(box)
+                affine_matrices.append(affine_matrix)
+            except Exception as e:
+                print(f"Error during affine transform: {str(e)}")
+                # 确保出现异常时（虽然现在应该不会抛出异常）也能保持帧列表同步
+                # 使用原始帧作为备用方案
+                face = cv2.resize(frame, (self.image_processor.resolution, self.image_processor.resolution), interpolation=cv2.INTER_LANCZOS4)
+                face = rearrange(torch.from_numpy(face), "h w c -> c h w")
+                box = [0, 0, frame.shape[1], frame.shape[0]]
+                affine_matrix = np.eye(3)
+                faces.append(face)
+                boxes.append(box)
+                affine_matrices.append(affine_matrix)
 
         faces = torch.stack(faces)
         return faces, boxes, affine_matrices
@@ -270,6 +282,14 @@ class LipsyncPipeline(DiffusionPipeline):
         print(f"Restoring {len(faces)} faces...")
         for index, face in enumerate(tqdm.tqdm(faces)):
             x1, y1, x2, y2 = boxes[index]
+            affine_matrix = affine_matrices[index]
+            
+            # 检查affine_matrix是否为恒等矩阵（没有人脸时的情况）
+            if np.array_equal(affine_matrix, np.eye(3)):
+                # 对于没有人脸的帧，仅使用原始视频帧
+                out_frames.append(video_frames[index])
+                continue
+                
             height = int(y2 - y1)
             width = int(x2 - x1)
             face = torchvision.transforms.functional.resize(face, size=(height, width), antialias=True)
@@ -277,7 +297,7 @@ class LipsyncPipeline(DiffusionPipeline):
             face = (face / 2 + 0.5).clamp(0, 1)
             face = (face * 255).to(torch.uint8).cpu().numpy()
             # face = cv2.resize(face, (width, height), interpolation=cv2.INTER_LANCZOS4)
-            out_frame = self.image_processor.restorer.restore_img(video_frames[index], face, affine_matrices[index])
+            out_frame = self.image_processor.restorer.restore_img(video_frames[index], face, affine_matrix)
             out_frames.append(out_frame)
         return np.stack(out_frames, axis=0)
 

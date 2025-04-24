@@ -56,7 +56,12 @@ class ImageProcessor:
             raise NotImplementedError("Using the CPU for face detection is not supported")
         bbox, landmark_2d_106 = self.face_detector(image)
         if bbox is None:
-            raise RuntimeError("Face not detected")
+            print("Face not detected, using original frame")
+            face = cv2.resize(image, (self.resolution, self.resolution), interpolation=cv2.INTER_LANCZOS4)
+            face = rearrange(torch.from_numpy(face), "h w c -> c h w")
+            affine_matrix = np.eye(3)
+            box = [0, 0, image.shape[1], image.shape[0]]
+            return face, box, affine_matrix
 
         pt_left_eye = np.mean(landmark_2d_106[[43, 48, 49, 51, 50]], axis=0)  # left eyebrow center
         pt_right_eye = np.mean(landmark_2d_106[101:106], axis=0)  # right eyebrow center
